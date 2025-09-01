@@ -34,13 +34,26 @@
 		<!-- Bars: Your ID, Connect/Status, File Input -->
 		<div class="box">
 			<div class="bar">
-				<span class="label">Your ID</span>
-				<div id="selfId"></div>
+				<span class="label">Your code</span>
+				<div id="selfId" title="Share this 6-character code with your peer"></div>
 				<button id="btnCopyId" disabled>Copy</button>
+				<button id="btnShare" type="button" title="Share this page">Share Url</button>
+				<button id="btnQR" type="button" title="Show QR code">Show QR</button>
 			</div>
 			<div class="bar">
 				<span class="label">Connection</span>
-				<input type="text" id="peerId" placeholder="Peer ID" />
+				<input
+					type="text"
+					id="peerId"
+					placeholder="Peer code (e.g. ABC2D3)"
+					autocomplete="off"
+					autocorrect="off"
+					autocapitalize="characters"
+					spellcheck="false"
+					maxlength="8"
+					pattern="[ABCDEFGHJKMNPQRSTUVWXYZ2-9\-\s]{6,8}"
+					title="Enter the 6-character code"
+				/>
 				<button id="btnConnect">Connect</button>
 			</div>
 			<div class="bar">
