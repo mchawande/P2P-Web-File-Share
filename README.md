@@ -32,6 +32,7 @@ Environment variables:
 -   ALLOWED_ORIGINS: Comma-separated allowed Origin values (e.g., `https://yourdomain.com,https://www.yourdomain.com`)
 -   ICE_SERVERS: JSON array of ICE server objects for RTCPeerConnection, e.g.
     `[{"urls":"turns:turn.example.com:5349","username":"user","credential":"pass"}]`
+-   ICE_FORCE_RELAY: When true, hints clients to use TURN-only (relay) connectivity. Helps on cellular/strict NATs.
 -   MAX_IP_CONNS: Soft limit per IP for concurrent WS connections (default 50)
 -   METRICS_ENABLED: Enable `/metrics` endpoint (default false)
 -   METRICS_TOKEN: Optional bearer token required to access `/metrics`
@@ -68,6 +69,7 @@ Recommended: put this behind Nginx, Caddy, or a cloud load balancer that termina
 -   Proxy WebSockets on `WS_PATH` (default `/ws`)
 -   Add HSTS at the proxy layer
 -   Set `ALLOWED_ORIGINS` to your site origin(s)
+-   Provide TURN over TLS (`turns:` on 5349) if users connect via cellular networks
 -   Restrict `/metrics` to trusted networks or require `Authorization: Bearer <token>`
 
 ## Health checks
@@ -76,7 +78,9 @@ Recommended: put this behind Nginx, Caddy, or a cloud load balancer that termina
 
 ## Client runtime config
 
--   GET `/config` returns `{ wsPath, iceServers }` consumed by the web client. Provide TURN in `ICE_SERVERS` for restrictive networks.
+-   GET `/config` returns `{ wsPath, iceServers, iceTransportPolicy }` consumed by the web client.
+    -   Provide TURN in `ICE_SERVERS` for restrictive networks (mobile/cellular, CGNAT, corporate Wi‑Fi).
+    -   Set `ICE_FORCE_RELAY=true` to suggest clients use relay-only when needed.
 
 ## Security checklist
 
@@ -95,6 +99,20 @@ Recommended: put this behind Nginx, Caddy, or a cloud load balancer that termina
 -   Use a lockfile in CI for reproducible builds (commit package-lock.json and prefer `npm ci`)
 
 This server is stateless: peers and sessions are in-memory only; files are never stored on the server.
+
+## Troubleshooting mobile pairing
+
+If pairing fails on phones or over cellular data:
+
+-   Serve the site over HTTPS. Many mobile browsers limit WebRTC on insecure origins.
+-   Configure a TURN server reachable over TLS, e.g. `turns:turn.example.com:5349` with username/credential.
+-   Set environment variables:
+    -   `ICE_SERVERS` to include your TURN server(s)
+    -   `ICE_FORCE_RELAY=true` to force relay-only routing when needed
+    -   Example:
+        `ICE_SERVERS=[{"urls":["turns:turn.example.com:5349"],"username":"user","credential":"pass"}]`
+-   Ensure your proxy forwards WebSocket upgrades on `WS_PATH` without buffering.
+-   Check the in-page logs: it prints ICE states and candidate types (host/srflx/relay). If you see no relay candidates, the TURN config is not working.
 
 ## License
 
