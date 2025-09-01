@@ -1,7 +1,7 @@
 import express from 'express';
 import { createServer } from 'node:http';
 import { WebSocketServer } from 'ws';
-import { v4 as uuidv4 } from 'uuid';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import helmet from 'helmet';
 import compression from 'compression';
@@ -68,7 +68,7 @@ if ((process.env.NODE_ENV || '').toLowerCase() === 'production' && allowedOrigin
 
 // Optional multi-instance signaling via Redis
 const useRedis = !!env.REDIS_URL;
-const instanceId = env.NODE_ID || uuidv4().slice(0, 8);
+const instanceId = env.NODE_ID || crypto.randomUUID().slice(0, 8);
 let redisPub = null;
 let redisSub = null;
 let redisPeersKey = null;
@@ -95,7 +95,7 @@ app.use(
 				'default-src': ["'self'"],
 				'script-src': ["'self'"],
 				'style-src': ["'self'"],
-				'img-src': ["'self'", 'data:'],
+				'img-src': ["'self'", 'data:', 'https://api.qrserver.com'], // allow QR image
 				// Allow WebSocket connections to same-origin and wss scheme if proxied
 				'connect-src': ["'self'", 'wss:', 'ws:'],
 				'object-src': ["'none'"],
@@ -287,7 +287,17 @@ httpServer.on('upgrade', (req, socket, head) => {
 wss.on('connection', (ws, req) => {
 	ws.isAlive = true;
 	ws.on('pong', heartbeat);
-	const id = uuidv4();
+	// Generate a short, human-friendly ID (unambiguous uppercase base32 set)
+	const alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // no I, L, O, 0, 1
+	function genId(len = 6) {
+		const bytes = crypto.randomBytes(len);
+		let s = '';
+		for (let i = 0; i < len; i++) s += alphabet[bytes[i] % alphabet.length];
+		return s;
+	}
+	let id = genId(6);
+	// Very low chance of collision; loop until unique in current session
+	while (peers.has(id)) id = genId(6);
 	peers.set(id, ws);
 	partner.set(id, null);
 	send(ws, { type: 'welcome', id });
