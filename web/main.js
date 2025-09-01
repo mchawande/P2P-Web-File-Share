@@ -21,7 +21,7 @@ const recvList = document.getElementById('recvList');
 // highlightImportant is imported for any external usage; logger internally uses it as well
 
 // Fetch runtime config from server
-let CONFIG = { wsPath: '/ws', iceServers: [{ urls: ['stun:stun.l.google.com:19302'] }] };
+let CONFIG = { wsPath: '/ws', iceServers: [{ urls: ['stun:stun.l.google.com:19302'] }], iceTransportPolicy: 'all' };
 try {
 	const res = await fetch('/config', { cache: 'no-store' });
 	if (res.ok) CONFIG = await res.json();
@@ -53,6 +53,7 @@ let pc = null;
 let dc = null;
 let remoteId = null;
 let connected = false;
+let connectWatchdog = null;
 
 // Format/normalize 6-char peer codes
 function normalizeCode(input) {
@@ -261,14 +262,40 @@ function renderList(listEl, items, type) {
 
 async function ensurePc() {
 	if (pc) return pc;
+	// Warn if not on HTTPS (most mobile browsers require secure context for WebRTC)
+	if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
+		warn('Not using HTTPS. Mobile browsers may block WebRTC or data channels.');
+	}
 	pc = new RTCPeerConnection({
 		iceServers:
 			Array.isArray(CONFIG.iceServers) && CONFIG.iceServers.length
 				? CONFIG.iceServers
 				: [{ urls: ['stun:stun.l.google.com:19302'] }],
+		// If server suggests relay-only for mobile/cellular, honor it
+		iceTransportPolicy: CONFIG.iceTransportPolicy === 'relay' ? 'relay' : 'all',
 	});
+	// Track candidate types for diagnostics
+	pc._candStats = { host: 0, srflx: 0, relay: 0, prflx: 0, total: 0 };
 	pc.onicecandidate = (ev) => {
-		if (ev.candidate && remoteId) sendSignal(remoteId, { type: 'candidate', candidate: ev.candidate });
+		if (ev.candidate) {
+			try {
+				const cand = String(ev.candidate.candidate || '');
+				const m = cand.match(/ typ (host|srflx|relay|prflx)\b/);
+				if (m) {
+					const t = m[1];
+					pc._candStats[t] = (pc._candStats[t] || 0) + 1;
+					pc._candStats.total += 1;
+				}
+			} catch {}
+			if (remoteId) sendSignal(remoteId, { type: 'candidate', candidate: ev.candidate });
+		} else {
+			// Gathering complete
+			const s = pc._candStats || {};
+			debug('ICE gathering complete', JSON.stringify(s));
+			if ((s.relay || 0) === 0 && location.protocol !== 'https:' && location.hostname !== 'localhost') {
+				warn('No TURN relay candidates and not on HTTPS. Mobile networks often require TURN over TLS.');
+			}
+		}
 	};
 	pc.onconnectionstatechange = () => {
 		statusEl.textContent = pc.connectionState;
@@ -294,6 +321,17 @@ async function ensurePc() {
 	pc.ondatachannel = (ev) => {
 		dc = ev.channel;
 		wireDc();
+	};
+	// ICE diagnostics for mobile troubleshooting
+	pc.onicegatheringstatechange = () => {
+		debug('iceGatheringState =', pc.iceGatheringState);
+	};
+	pc.oniceconnectionstatechange = () => {
+		debug('iceConnectionState =', pc.iceConnectionState);
+		// Surface likely mobile issues
+		if (pc.iceConnectionState === 'failed') {
+			warn('ICE failed. On mobile/cellular you may need a TURN server.');
+		}
 	};
 	return pc;
 }
@@ -459,7 +497,11 @@ btnConnect.onclick = async () => {
 	await ensurePc();
 	dc = pc.createDataChannel('file');
 	wireDc();
-	const offer = await pc.createOffer();
+	const offer = await pc.createOffer({
+		// Try to speed up ICE by not gathering until setLocalDescription
+		offerToReceiveAudio: false,
+		offerToReceiveVideo: false,
+	});
 	await pc.setLocalDescription(offer);
 	sendSignal(remoteId, { type: 'offer', sdp: pc.localDescription });
 	statusEl.textContent = 'connecting';
@@ -469,6 +511,19 @@ btnConnect.onclick = async () => {
 	}
 	setUiConnected(true); // reflect connecting state in UI
 	updateFileUi();
+	// Start a watchdog: if not connected within 15s, show hint
+	clearTimeout(connectWatchdog);
+	connectWatchdog = setTimeout(() => {
+		if (!connected) {
+			const s = pc?._candStats || {};
+			const hasRelay = (s.relay || 0) > 0;
+			if (!hasRelay) {
+				warn('Still not connected. Tips: ensure TURN is configured (ICE_SERVERS) and consider forcing relay.');
+			} else {
+				warn('Connection slow to establish. Check network quality or try again.');
+			}
+		}
+	}, 15000);
 };
 
 btnSend.onclick = async () => {
@@ -604,6 +659,9 @@ async function doDisconnect() {
 	remoteId = null;
 	connected = false;
 	statusEl.textContent = 'disconnected';
+	try {
+		clearTimeout(connectWatchdog);
+	} catch {}
 	if (statusWrap) {
 		statusWrap.classList.remove('connected', 'connecting');
 		statusWrap.classList.add('disconnected');
