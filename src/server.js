@@ -23,6 +23,8 @@ const env = cleanEnv(process.env, {
 	WS_PATH: str({ default: '/ws' }),
 	ALLOWED_ORIGINS: str({ default: '' }),
 	ICE_SERVERS: json({ default: [{ urls: ['stun:stun.l.google.com:19302'] }] }),
+	// Some mobile/cellular networks block UDP/NAT traversal; allow forcing TURN-only
+	ICE_FORCE_RELAY: bool({ default: false }),
 	MAX_IP_CONNS: num({ default: 50 }),
 	// Disable metrics by default for production; can be enabled explicitly
 	METRICS_ENABLED: bool({ default: false }),
@@ -168,7 +170,8 @@ app.get('/healthz', (_req, res) => {
 // Config endpoint to provide client with WS path and ICE servers
 app.get('/config', configLimiter, (_req, res) => {
 	let iceServers = Array.isArray(env.ICE_SERVERS) ? env.ICE_SERVERS : [{ urls: ['stun:stun.l.google.com:19302'] }];
-	res.json({ wsPath: WS_PATH, iceServers });
+	const iceTransportPolicy = env.ICE_FORCE_RELAY ? 'relay' : 'all';
+	res.json({ wsPath: WS_PATH, iceServers, iceTransportPolicy });
 });
 
 // Prometheus metrics
