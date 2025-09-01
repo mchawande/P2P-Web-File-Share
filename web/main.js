@@ -54,6 +54,7 @@ let dc = null;
 let remoteId = null;
 let connected = false;
 let connectWatchdog = null;
+let alertedConnected = false; // ensure user alert fires only once per session
 
 // Format/normalize 6-char peer codes
 function normalizeCode(input) {
@@ -236,12 +237,31 @@ function renderList(listEl, items, type) {
 			// Actions row (download link for received)
 			const actions = document.createElement('div');
 			actions.className = 'row actions';
+			// For received files: show both View (open in new tab) and Download
 			if (type === 'recv' && t.url && t.status === 'done') {
-				const a = document.createElement('a');
-				a.href = t.url;
-				a.download = t.name || 'file';
-				a.textContent = 'Download';
-				actions.appendChild(a);
+				const view = document.createElement('a');
+				view.href = t.url;
+				view.target = '_blank';
+				view.rel = 'noopener noreferrer';
+				view.textContent = 'View';
+				actions.appendChild(view);
+				const sep = document.createTextNode(' ');
+				actions.appendChild(sep);
+				const dl = document.createElement('a');
+				dl.href = t.url;
+				dl.download = t.name || 'file';
+				dl.textContent = 'Download';
+				actions.appendChild(dl);
+			}
+
+			// For sent files (after completion), allow viewing the local blob as well
+			if (type === 'sent' && t.url && t.status === 'done') {
+				const view = document.createElement('a');
+				view.href = t.url;
+				view.target = '_blank';
+				view.rel = 'noopener noreferrer';
+				view.textContent = 'View';
+				actions.appendChild(view);
 			}
 
 			if (t.size && t.size > 0) {
@@ -344,6 +364,13 @@ function wireDc() {
 	dc.onopen = () => {
 		success('DataChannel open');
 		if (remoteId) success('Connected to', asId(remoteId));
+		// Notify the user once the peer connection is established
+		if (!alertedConnected) {
+			try {
+				alert(remoteId ? `Connected to ${prettyCode(remoteId)}` : 'Connected');
+			} catch {}
+			alertedConnected = true;
+		}
 		connected = true;
 		setUiConnected(true);
 		updateFileUi();
@@ -351,6 +378,7 @@ function wireDc() {
 	dc.onclose = () => {
 		warn('DataChannel closed');
 		connected = false;
+		alertedConnected = false; // allow alert on next successful connection
 		setUiConnected(false);
 		updateFileUi();
 	};
@@ -571,6 +599,7 @@ btnSend.onclick = async () => {
 		sent: 0,
 		status: 'sending',
 		createdAt: Date.now(),
+		url: URL.createObjectURL(file), // allow local preview of sent file
 	};
 	transfers.sent.push(out);
 	renderList(sentList, transfers.sent, 'sent');
