@@ -4,6 +4,8 @@ const { info, warn, error, success, debug } = createLogger(logEl);
 // peer listing removed for privacy
 const selfIdEl = document.getElementById('selfId');
 const btnCopyId = document.getElementById('btnCopyId');
+const btnShare = document.getElementById('btnShare');
+const btnQR = document.getElementById('btnQR');
 const statusEl = document.getElementById('status');
 const statusWrap = document.getElementById('statusWrap');
 const peerIdInput = document.getElementById('peerId');
@@ -31,10 +33,10 @@ let selfId = null;
 ws.addEventListener('message', (ev) => {
 	const msg = JSON.parse(ev.data);
 	if (msg.type === 'welcome') {
-		selfId = msg.id;
-		selfIdEl.textContent = selfId;
+		selfId = formatCode(msg.id);
+		selfIdEl.textContent = prettyCode(selfId);
 		if (btnCopyId) btnCopyId.disabled = false;
-		success('Welcome', asId(selfId));
+		success('Your code', asId(selfId));
 		return;
 	}
 	if (msg.type === 'signal' && msg.from) {
@@ -52,6 +54,21 @@ let dc = null;
 let remoteId = null;
 let connected = false;
 
+// Format/normalize 6-char peer codes
+function normalizeCode(input) {
+	if (!input) return '';
+	return String(input)
+		.toUpperCase()
+		.replace(/[^A-Z0-9]/g, '');
+}
+function formatCode(input) {
+	return normalizeCode(input); // stored form (no hyphens)
+}
+function prettyCode(input) {
+	const s = normalizeCode(input);
+	if (s.length <= 3) return s;
+	return s.slice(0, 3) + '-' + s.slice(3);
+}
 // Centralized UI update for file-related controls
 function updateFileUi() {
 	const hasFile = !!(fileInput && fileInput.files && fileInput.files.length);
@@ -378,6 +395,7 @@ function wireDc() {
 }
 
 async function onSignal(from, payload) {
+	from = formatCode(from);
 	if (payload?.type === 'busy') {
 		warn('Peer is busy', asId(from));
 		statusEl.textContent = 'peer busy';
@@ -407,7 +425,7 @@ async function onSignal(from, payload) {
 	}
 	remoteId = from;
 	// Reflect the inbound peer in the input for clarity
-	if (peerIdInput) peerIdInput.value = remoteId;
+	if (peerIdInput) peerIdInput.value = prettyCode(remoteId);
 	await ensurePc();
 	// If already connected, ignore new offers to avoid duplicate sessions
 	if (connected && payload.type === 'offer') {
@@ -434,8 +452,10 @@ btnConnect.onclick = async () => {
 	if (connected || (pc && ['connecting', 'connected'].includes(pc.connectionState))) {
 		return alert('Already connected or connecting. Disconnect first.');
 	}
-	remoteId = peerIdInput.value.trim();
-	if (!remoteId) return alert('Enter peer ID');
+	remoteId = formatCode(peerIdInput.value.trim());
+	if (!remoteId) return alert('Enter peer code');
+	// reflect normalized formatting back to input
+	peerIdInput.value = prettyCode(remoteId);
 	await ensurePc();
 	dc = pc.createDataChannel('file');
 	wireDc();
@@ -630,7 +650,7 @@ if (btnCopyId) {
 			return;
 		}
 		const original = btnCopyId.textContent;
-		const ok = await copyText(selfId);
+		const ok = await copyText(formatCode(selfId));
 		if (ok) {
 			btnCopyId.textContent = 'Copied!';
 		} else {
@@ -646,3 +666,135 @@ if (btnCopyId) {
 
 // Initialize file UI state on load
 updateFileUi();
+
+// Prefill peer code from URL (?to=CODE) for easy sharing
+try {
+	const u = new URL(location.href);
+	const to = u.searchParams.get('to');
+	if (to && peerIdInput) {
+		const normalized = formatCode(to);
+		if (normalized) peerIdInput.value = prettyCode(normalized);
+	}
+} catch {}
+
+function buildShareLink() {
+	// Use absolute URL with ?to=selfId so peer can paste and connect easily
+	if (!selfId) return location.href;
+	const base = location.origin + location.pathname;
+	const url = new URL(base);
+	url.searchParams.set('to', formatCode(selfId));
+	return url.toString();
+}
+
+// Share URL with Web Share API fallback to clipboard
+if (btnShare) {
+	btnShare.addEventListener('click', async () => {
+		if (!selfId) {
+			alert('Your code is not ready yet.');
+			return;
+		}
+		const url = buildShareLink();
+		const text = `My code: ${prettyCode(selfId)}`;
+		if (navigator.share) {
+			try {
+				await navigator.share({ title: document.title || 'P2P Web File Share', text, url });
+				return;
+			} catch (e) {
+				// fall through to clipboard
+			}
+		}
+		const ok = await copyText(url);
+		if (ok) success('Link copied to clipboard');
+		else warn('Copy failed. Manually copy:', url);
+	});
+}
+
+// Show QR code overlay for the share URL (uses remote QR image service)
+if (btnQR) {
+	btnQR.addEventListener('click', () => {
+		if (!selfId) {
+			alert('Your code is not ready yet.');
+			return;
+		}
+		const url = buildShareLink();
+		const overlay = document.createElement('div');
+		overlay.style.position = 'fixed';
+		overlay.style.inset = '0';
+		overlay.style.background = 'rgba(0,0,0,0.6)';
+		overlay.style.display = 'flex';
+		overlay.style.alignItems = 'center';
+		overlay.style.justifyContent = 'center';
+		overlay.style.zIndex = '9999';
+		overlay.setAttribute('role', 'dialog');
+		overlay.setAttribute('aria-modal', 'true');
+
+		const box = document.createElement('div');
+		box.style.background = '#fff';
+		box.style.borderRadius = '8px';
+		box.style.padding = '16px';
+		box.style.boxShadow = '0 6px 24px rgba(0,0,0,0.25)';
+		box.style.minWidth = '280px';
+		box.style.maxWidth = '90vw';
+		box.style.textAlign = 'center';
+
+		const title = document.createElement('div');
+		title.textContent = 'Scan to open';
+		title.style.fontWeight = '600';
+		title.style.marginBottom = '8px';
+
+		const code = document.createElement('div');
+		code.textContent = prettyCode(selfId);
+		code.style.fontFamily = 'monospace';
+		code.style.letterSpacing = '1px';
+		code.style.marginBottom = '8px';
+
+		const img = document.createElement('img');
+		img.alt = 'QR code';
+		img.width = 240;
+		img.height = 240;
+		img.style.imageRendering = 'pixelated';
+		img.style.border = '1px solid #eee';
+		img.style.background = '#fff';
+		img.src = 'https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=' + encodeURIComponent(url);
+
+		const link = document.createElement('div');
+		link.textContent = url;
+		link.style.fontSize = '12px';
+		link.style.wordBreak = 'break-all';
+		link.style.marginTop = '8px';
+
+		const actions = document.createElement('div');
+		actions.style.marginTop = '12px';
+		actions.style.display = 'flex';
+		actions.style.gap = '8px';
+		actions.style.justifyContent = 'center';
+		const btnCopy = document.createElement('button');
+		btnCopy.textContent = 'Copy link';
+		btnCopy.addEventListener('click', async (e) => {
+			e.stopPropagation();
+			const ok = await copyText(url);
+			if (ok) btnCopy.textContent = 'Copied!';
+			else btnCopy.textContent = 'Copy failed';
+			setTimeout(() => (btnCopy.textContent = 'Copy link'), 1000);
+		});
+		const btnClose = document.createElement('button');
+		btnClose.textContent = 'Close';
+		btnClose.addEventListener('click', (e) => {
+			e.stopPropagation();
+			try {
+				document.body.removeChild(overlay);
+			} catch {}
+		});
+		actions.append(btnCopy, btnClose);
+
+		box.append(title, code, img, link, actions);
+		overlay.appendChild(box);
+		overlay.addEventListener('click', () => {
+			try {
+				document.body.removeChild(overlay);
+			} catch {}
+		});
+		box.addEventListener('click', (e) => e.stopPropagation());
+		document.body.appendChild(overlay);
+	});
+}
